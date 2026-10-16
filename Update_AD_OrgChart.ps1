@@ -149,7 +149,6 @@ function Update-OrgChart($userImport)
         Write-Progress -Activity "Updating users..." -Status "$index/$recordCount - $($userRecord.$UPN)"
         $changeMade = $false
         $newManager = $null
-
         $logRecord = New-LogRecord
 
         if ([string]::IsNullOrWhiteSpace($userRecord.$upn))
