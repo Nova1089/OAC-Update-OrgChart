@@ -32,7 +32,7 @@ function Show-Introduction
                 "- Country`n" +
                 "- State`n" +
                 "- City`n" +
-                "- Clinic`n`n" +
+                "- Office Location`n`n" +
                 "Script must run on Entra ID Connect server.") -ForegroundColor "Cyan"
 
 }
@@ -150,9 +150,10 @@ function Update-OrgChart($userImport)
 
         $logRecord = New-LogRecord
 
-        if ([string]::IsNullOrWhiteSpace($($userRecord.$upn)))
+        if ([string]::IsNullOrWhiteSpace($userRecord.$upn))
         {
             $logRecord.Status = "Skipped: blank UPN"
+            $logRecord | Export-CSV -Path $logFilePath -Append -NoTypeInformation
             continue
         }
 
@@ -188,13 +189,12 @@ function Update-OrgChart($userImport)
         }
 
         # Fill in 'before' values on log record
-        $logRecord.UPN = $userUpn
         $logRecord.'Title Before' = $adUser.title
         $logRecord.'Department Before' = $adUser.department
         $managerName = ($adUser.manager -split ',')[0] -replace '^CN=', '' # get the canonical name from the distinguished name
         $logRecord.'Manager Before' = $managerName
         $logRecord.'Country Before' = $adUser.co
-        $logRecord.'State Before' = $adUser.state
+        $logRecord.'State Before' = $adUser.st
         $logRecord.'City Before' = $adUser.l
         $logRecord.'Clinic Before' = $adUser.physicalDeliveryOfficeName
         
@@ -307,13 +307,13 @@ function Update-OrgChart($userImport)
             {
                 $errorRecord = $_
                 $status.Add($errorRecord.ToString())
-                $logRecord.'State After' = $adUser.state
+                $logRecord.'State After' = $adUser.st
             }
         }
         else
         {
             $status.Add("Provided state is blank")
-            $logRecord.'State After' = $adUser.state
+            $logRecord.'State After' = $adUser.st
         }
 
         # Update city
@@ -371,7 +371,7 @@ function Update-OrgChart($userImport)
         # Export log record
         $logRecord | Export-CSV -Path $logFilePath -Append -NoTypeInformation
     }
-    Write-Progress -Completed
+    Write-Progress -Completed -Activity "Updating users..."
 }
 
 function New-LogRecord
