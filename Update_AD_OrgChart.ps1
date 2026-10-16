@@ -33,7 +33,7 @@ function Show-Introduction
                 "- State`n" +
                 "- City`n" +
                 "- Office Location`n`n" +
-                "Script must run on Entra ID Connect server.") -ForegroundColor "Cyan"
+                "Script must run on Entra ID Connect server.`n") -ForegroundColor "Cyan"
 
 }
 
@@ -185,7 +185,7 @@ function Update-OrgChart($userImport)
         }
         if ($null -eq $adUser)
         {
-            $logRecord.Status = "User not found in AD"
+            $logRecord.Status = "Skipped: User not found in AD"
             $logRecord | Export-CSV -Path $logFilePath -Append -NoTypeInformation
             continue
         }        
@@ -469,5 +469,6 @@ Show-Introduction
 $userImport = TryGet-UserCSV
 Read-Host "Press Enter to make the changes"
 Update-OrgChart $userImport
+Write-Host "All done!" -ForegroundColor "Green"
 Sync-ToEntraID
 Read-Host "Press Enter to exit"
