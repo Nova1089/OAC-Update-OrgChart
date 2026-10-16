@@ -147,6 +147,7 @@ function Update-OrgChart($userImport)
     {
         $index++
         Write-Progress -Activity "Updating users..." -Status "$index/$recordCount - $($userRecord.$UPN)"
+        $changeMade = $false
 
         $logRecord = New-LogRecord
 
@@ -188,184 +189,243 @@ function Update-OrgChart($userImport)
             continue
         }
 
+        $errors = New-Object System.Collections.Generic.List[string]
+
+        # Get manager info
+        if ($null -ne $adUser.manager)
+        {
+            try
+            {
+                $manager = Get-ADUser -Identity $adUser.manager -ErrorAction "Stop"
+            }
+            catch
+            {
+                $errorRecord = $_
+                $errors.Add("Error getting manager: $errorRecord")
+            }
+            if ($null -eq $manager)
+            {
+                $errors.Add("Current manager not found in AD.")
+            }
+        }
+
         # Fill in 'before' values on log record
         $logRecord.'Title Before' = $adUser.title
         $logRecord.'Department Before' = $adUser.department
-        $managerName = ($adUser.manager -split ',')[0] -replace '^CN=', '' # get the canonical name from the distinguished name
-        $logRecord.'Manager Before' = $managerName
+        if ($manager) { $logRecord.'Manager Before' = $manager.name }        
         $logRecord.'Country Before' = $adUser.co
         $logRecord.'State Before' = $adUser.st
         $logRecord.'City Before' = $adUser.l
         $logRecord.'Clinic Before' = $adUser.physicalDeliveryOfficeName
 
-        # Fill in 'after' values on log record. They will be the same as before unless later.
+        # Fill in 'after' values on log record. They will be the same as before unless changed later.
         $logRecord.'Title After' = $adUser.title
         $logRecord.'Department After' = $adUser.department
-        $logRecord.'Manager After' = $managerName
+        if ($manager) { $logRecord.'Manager After' = $manager.name }
         $logRecord.'Country After' = $adUser.co
         $logRecord.'State After' = $adUser.st
         $logRecord.'City After' = $adUser.l
         $logRecord.'Clinic After' = $adUser.physicalDeliveryOfficeName
-        
-        $status = New-Object System.Collections.Generic.List[string]
-        
+                
         # Update job title
         if (-not [string]::IsNullOrWhiteSpace($newJobTitle))
         {
-            try
+            if ($adUser.title -ne $newJobTitle) # check if there are changes to make
             {
-                Set-ADUser -Identity $adUser -Title $newJobTitle -ErrorAction "Stop"
-                $logRecord.'Title After' = $newJobTitle
-            }
-            catch
-            {
-                $errorRecord = $_
-                $status.Add($errorRecord.ToString())
+                try
+                {
+                    Set-ADUser -Identity $adUser -Title $newJobTitle -ErrorAction "Stop"
+                    $logRecord.'Title After' = $newJobTitle
+                    $changeMade = $true
+                }
+                catch
+                {
+                    $errorRecord = $_
+                    $errors.Add("Error updating title: $errorRecord")
+                }
             }
         }
         else
         {
-            $status.Add("Provided job title is blank.")
+            $errors.Add("Provided job title is blank.")
         }
 
         # Update department
         if (-not [string]::IsNullOrWhiteSpace($newDepartment))
         {
-            try
+            if ($adUser.department -ne $newDepartment) # check if there are changes to make
             {
-                Set-ADUser -Identity $adUser -Department $newDepartment -ErrorAction "Stop"
-                $logRecord.'Department After' = $newDepartment
-            }
-            catch
-            {
-                $errorRecord = $_
-                $status.Add($errorRecord.ToString())
+                try
+                {
+                    Set-ADUser -Identity $adUser -Department $newDepartment -ErrorAction "Stop"
+                    $logRecord.'Department After' = $newDepartment
+                    $changeMade = $true
+                }
+                catch
+                {
+                    $errorRecord = $_
+                    $errors.Add("Error updating department: $errorRecord")
+                }
             }
         }
         else
         {
-            $status.Add("Provided department is blank.")
+            $errors.Add("Provided department is blank.")
         }
 
         # Update manager
         if (-not [string]::IsNullOrWhiteSpace($newManagerEmail))
         {
-            try
+            if ($manager.UserPrincipalName -ne $newManagerEmail) # check if there are changes to make
             {
-                $manager = Get-ADUser -Filter { UserPrincipalName -eq $newManagerEmail} -ErrorAction "Stop"
-                if ($null -ne $manager)
+                try
                 {
-                    Set-ADUser -Identity $adUser -Manager $manager.objectGUID -ErrorAction "Stop"
-                    $newManagerName = ($manager.DistinguishedName -split ',')[0] -replace '^CN=', '' # get the canonical name from the distinguished name
-                    $logRecord.'Manager After' = $newManagerName
+                    $newManager = Get-ADUser -Filter { UserPrincipalName -eq $newManagerEmail} -ErrorAction "Stop"
+                    if ($null -ne $manager)
+                    {
+                        Set-ADUser -Identity $adUser -Manager $newManager.objectGUID -ErrorAction "Stop"
+                        $logRecord.'Manager After' = $newManager.name
+                        $changeMade = $true
+                    }
+                    else
+                    {
+                        $errors.Add("Manager not found in AD. Manager unchanged.")
+                    }
                 }
-                else
+                catch
                 {
-                    $status.Add("Manager not found in AD. Manager unchanged.")
+                    $errorRecord = $_
+                    $errors.Add("Error updating manager: $errorRecord")
                 }
-            }
-            catch
-            {
-                $errorRecord = $_
-                $status.Add($errorRecord.ToString())
             }
         }
         else
         {
-            $status.Add("Provided manager is blank.")
+            $errors.Add("Provided manager is blank.")
         }
 
         # Update country
         if (-not [string]::IsNullOrWhiteSpace($newCountry))
         {
-            try
+            if ($adUser.co -ne $newCountry) # check if there are changes to make
             {
-                Set-ADUser -Identity $adUser -Replace @{co=$newCountry} -ErrorAction "Stop"
-                $logRecord.'Country After' = $newCountry
-            }
-            catch
-            {
-                $errorRecord = $_
-                $status.Add($errorRecord.ToString())
+                try
+                {
+                    Set-ADUser -Identity $adUser -Replace @{co=$newCountry} -ErrorAction "Stop"
+                    $logRecord.'Country After' = $newCountry
+                    $changeMade = $true
+                }
+                catch
+                {
+                    $errorRecord = $_
+                    $errors.Add("Error updating country: $errorRecord")
+                }
             }
         }
         else
         {
-            $status.Add("Provided country is blank")
+            $errors.Add("Provided country is blank")
         }
 
         # Update state
         if (-not [string]::IsNullOrWhiteSpace($newState))
         {
-            try
+            if ($adUser.st -ne $newState) # check if there are changes to make
             {
-                Set-ADUser -Identity $adUser -State $newState -ErrorAction "Stop"
-                $logRecord.'State After' = $newState
-
-            }
-            catch
-            {
-                $errorRecord = $_
-                $status.Add($errorRecord.ToString())
+                try
+                {
+                    Set-ADUser -Identity $adUser -State $newState -ErrorAction "Stop"
+                    $logRecord.'State After' = $newState
+                    $changeMade = $true
+                }
+                catch
+                {
+                    $errorRecord = $_
+                    $errors.Add("Error updating state: $errorRecord")
+                }
             }
         }
         else
         {
-            $status.Add("Provided state is blank")
+            $errors.Add("Provided state is blank")
         }
 
         # Update city
         if (-not [string]::IsNullOrWhiteSpace($newCity))
         {
-            try
+            if ($adUser.l -ne $newCity) # check if there are changes to make
             {
-                Set-ADUser -Identity $adUser -City $newCity -ErrorAction "Stop"
-                $logRecord.'City After' = $newCity
-            }
-            catch
-            {
-                $errorRecord = $_
-                $status.Add($errorRecord.ToString())
+                try
+                {
+                    Set-ADUser -Identity $adUser -City $newCity -ErrorAction "Stop"
+                    $logRecord.'City After' = $newCity
+                    $changeMade = $true
+                }
+                catch
+                {
+                    $errorRecord = $_
+                    $errors.Add("Error updating city: $errorRecord")
+                }
             }
         }
         else
         {
-            $status.Add("Provided city is blank")
+            $errors.Add("Provided city is blank")
         }
 
         # Update office location
         if ( -not([string]::IsNullOrWhiteSpace($newClinic)) -and -not([string]::IsNullOrWhiteSpace($newState)) )
         {
-            try
+            $newOfficeLocation = "$newState - $newClinic"
+            if ($adUser.physicalDeliveryOfficeName -ne $newOfficeLocation) # check if there are changes to make
             {
-                Set-ADUser -Identity $adUser -Office "$newState - $newClinic" -ErrorAction "Stop"
-                $logRecord.'Clinic After' = "$newState - $newClinic"
-            }
-            catch
-            {
-                $errorRecord = $_
-                $status.Add($errorRecord.ToString())
+                try
+                {
+                    Set-ADUser -Identity $adUser -Office $newOfficeLocation -ErrorAction "Stop"
+                    $logRecord.'Clinic After' = $newOfficeLocation
+                    $changeMade = $true
+                }
+                catch
+                {
+                    $errorRecord = $_
+                    $errors.Add("Error updating office location: $errorRecord")
+                }
             }
         }
         else
         {
-            $status.Add("Provided clinic or state is blank")
+            $errors.Add("Provided clinic or state is blank")
         }
 
         # Set status
-        if ($status.Count -eq 0)
+        if ($errors.Count -eq 0) # if no errors
         {
-            $logRecord.Status = "Success"
+            if ($changeMade)
+            {
+                $logRecord.Status = "Updated successfully"
+            }
+            else
+            {
+                $logRecord.Status = "No changes"
+            }            
         }
         else
         {
-            $logRecord.Status = $status -Join ' -- '
+            $errorMessage = $errors -Join ' -- '
+            if ($changeMade)
+            {
+                $logRecord.Status = "Partial success with errors: $errorMessage" 
+            }
+            else
+            {
+                $logRecord.Status = "No changes due to errors: $errorMessage"
+            }
         }
         
         # Export log record
         $logRecord | Export-CSV -Path $logFilePath -Append -NoTypeInformation
     }
-    Write-Progress -Completed -Activity "Updating users..."
+    Write-Progress -Activity "Updating users..." -Completed
 }
 
 function New-LogRecord
