@@ -8,7 +8,7 @@
 #Requires -Modules @{ ModuleName="ADSync"; ModuleVersion="1.0.0.0"}
 #Requires -RunAsAdministrator
 
-# Script must run on Entra ID connect server
+# Script must run on Entra ID connect server.
 
 # functions
 function Initialize-HeaderNames # remember to tweak this function if your spreadsheet uses different header names
@@ -197,6 +197,15 @@ function Update-OrgChart($userImport)
         $logRecord.'State Before' = $adUser.st
         $logRecord.'City Before' = $adUser.l
         $logRecord.'Clinic Before' = $adUser.physicalDeliveryOfficeName
+
+        # Fill in 'after' values on log record. They will be the same as before unless later.
+        $logRecord.'Title After' = $adUser.title
+        $logRecord.'Department After' = $adUser.department
+        $logRecord.'Manager After' = $managerName
+        $logRecord.'Country After' = $adUser.co
+        $logRecord.'State After' = $adUser.st
+        $logRecord.'City After' = $adUser.l
+        $logRecord.'Clinic After' = $adUser.physicalDeliveryOfficeName
         
         $status = New-Object System.Collections.Generic.List[string]
         
@@ -212,13 +221,11 @@ function Update-OrgChart($userImport)
             {
                 $errorRecord = $_
                 $status.Add($errorRecord.ToString())
-                $logRecord.'Title After' = $adUser.title
             }
         }
         else
         {
             $status.Add("Provided job title is blank.")
-            $logRecord.'Title After' = $adUser.title
         }
 
         # Update department
@@ -233,13 +240,11 @@ function Update-OrgChart($userImport)
             {
                 $errorRecord = $_
                 $status.Add($errorRecord.ToString())
-                $logRecord.'Department After' = $adUser.department
             }
         }
         else
         {
             $status.Add("Provided department is blank.")
-            $logRecord.'Department After' = $adUser.department
         }
 
         # Update manager
@@ -257,20 +262,17 @@ function Update-OrgChart($userImport)
                 else
                 {
                     $status.Add("Manager not found in AD. Manager unchanged.")
-                    $logRecord.'Manager After' = $managerName
                 }
             }
             catch
             {
                 $errorRecord = $_
                 $status.Add($errorRecord.ToString())
-                $logRecord.'Manager After' = $managerName
             }
         }
         else
         {
             $status.Add("Provided manager is blank.")
-            $logRecord.'Manager After' = $managerName
         }
 
         # Update country
@@ -285,13 +287,11 @@ function Update-OrgChart($userImport)
             {
                 $errorRecord = $_
                 $status.Add($errorRecord.ToString())
-                $logRecord.'Country After' = $adUser.co
             }
         }
         else
         {
             $status.Add("Provided country is blank")
-            $logRecord.'Country After' = $adUser.co
         }
 
         # Update state
@@ -307,13 +307,11 @@ function Update-OrgChart($userImport)
             {
                 $errorRecord = $_
                 $status.Add($errorRecord.ToString())
-                $logRecord.'State After' = $adUser.st
             }
         }
         else
         {
             $status.Add("Provided state is blank")
-            $logRecord.'State After' = $adUser.st
         }
 
         # Update city
@@ -328,13 +326,11 @@ function Update-OrgChart($userImport)
             {
                 $errorRecord = $_
                 $status.Add($errorRecord.ToString())
-                $logRecord.'City After' = $adUser.l
             }
         }
         else
         {
             $status.Add("Provided city is blank")
-            $logRecord.'City After' = $adUser.l
         }
 
         # Update office location
@@ -349,13 +345,11 @@ function Update-OrgChart($userImport)
             {
                 $errorRecord = $_
                 $status.Add($errorRecord.ToString())
-                $logRecord.'Clinic After' = $adUser.physicalDeliveryOfficeName
             }
         }
         else
         {
             $status.Add("Provided clinic or state is blank")
-            $logRecord.'Clinic After' = $adUser.physicalDeliveryOfficeName
         }
 
         # Set status
