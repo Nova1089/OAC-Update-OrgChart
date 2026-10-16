@@ -1,6 +1,6 @@
-# Version 1.00
-# Created By: 
-# Release Date:
+# Version: 1.00
+# Created By: Zak Paine
+# Release Date: 10/16/2026
 # Revised By: 
 # Revised Date:
 
@@ -148,6 +148,7 @@ function Update-OrgChart($userImport)
         $index++
         Write-Progress -Activity "Updating users..." -Status "$index/$recordCount - $($userRecord.$UPN)"
         $changeMade = $false
+        $newManager = $null
 
         $logRecord = New-LogRecord
 
@@ -187,50 +188,33 @@ function Update-OrgChart($userImport)
             $logRecord.Status = "User not found in AD"
             $logRecord | Export-CSV -Path $logFilePath -Append -NoTypeInformation
             continue
-        }
-
-        $errors = New-Object System.Collections.Generic.List[string]
-
-        # Get manager info
-        if ($null -ne $adUser.manager)
-        {
-            try
-            {
-                $manager = Get-ADUser -Identity $adUser.manager -ErrorAction "Stop"
-            }
-            catch
-            {
-                $errorRecord = $_
-                $errors.Add("Error getting manager: $errorRecord")
-            }
-            if ($null -eq $manager)
-            {
-                $errors.Add("Current manager not found in AD.")
-            }
-        }
+        }        
 
         # Fill in 'before' values on log record
         $logRecord.'Title Before' = $adUser.title
         $logRecord.'Department Before' = $adUser.department
-        if ($manager) { $logRecord.'Manager Before' = $manager.name }        
+        $managerName = ($adUser.manager -split ',')[0] -replace '^CN=', '' # get the canonical name from the distinguished name
+        $logRecord.'Manager Before' = $managerName      
         $logRecord.'Country Before' = $adUser.co
         $logRecord.'State Before' = $adUser.st
         $logRecord.'City Before' = $adUser.l
-        $logRecord.'Clinic Before' = $adUser.physicalDeliveryOfficeName
+        $logRecord.'Office Location Before' = $adUser.physicalDeliveryOfficeName
 
         # Fill in 'after' values on log record. They will be the same as before unless changed later.
         $logRecord.'Title After' = $adUser.title
         $logRecord.'Department After' = $adUser.department
-        if ($manager) { $logRecord.'Manager After' = $manager.name }
+        $logRecord.'Manager After' = $managerName    
         $logRecord.'Country After' = $adUser.co
         $logRecord.'State After' = $adUser.st
         $logRecord.'City After' = $adUser.l
-        $logRecord.'Clinic After' = $adUser.physicalDeliveryOfficeName
+        $logRecord.'Office Location After' = $adUser.physicalDeliveryOfficeName
+
+        $errors = New-Object System.Collections.Generic.List[string]
                 
         # Update job title
         if (-not [string]::IsNullOrWhiteSpace($newJobTitle))
         {
-            if ($adUser.title -ne $newJobTitle) # check if there are changes to make
+            if ($adUser.title -cne $newJobTitle) # check if there are changes to make
             {
                 try
                 {
@@ -253,7 +237,7 @@ function Update-OrgChart($userImport)
         # Update department
         if (-not [string]::IsNullOrWhiteSpace($newDepartment))
         {
-            if ($adUser.department -ne $newDepartment) # check if there are changes to make
+            if ($adUser.department -cne $newDepartment) # check if there are changes to make
             {
                 try
                 {
@@ -276,21 +260,27 @@ function Update-OrgChart($userImport)
         # Update manager
         if (-not [string]::IsNullOrWhiteSpace($newManagerEmail))
         {
-            if ($manager.UserPrincipalName -ne $newManagerEmail) # check if there are changes to make
+            try
+            {
+                $newManager = Get-ADUser -Filter { UserPrincipalName -eq $newManagerEmail} -ErrorAction "Stop"
+                if ($null -eq $newManager)
+                {
+                    $errors.Add("Manager not found in AD. Manager unchanged.")
+                }
+            }
+            catch
+            {
+                $errorRecord = $_
+                $errors.Add("Error getting new manager: $errorRecord")
+            }
+            
+            if (($null -ne $newManager) -and ($adUser.manager -ne $newManager.DistinguishedName)) # check if there are changes to make
             {
                 try
-                {
-                    $newManager = Get-ADUser -Filter { UserPrincipalName -eq $newManagerEmail} -ErrorAction "Stop"
-                    if ($null -ne $manager)
-                    {
-                        Set-ADUser -Identity $adUser -Manager $newManager.objectGUID -ErrorAction "Stop"
-                        $logRecord.'Manager After' = $newManager.name
-                        $changeMade = $true
-                    }
-                    else
-                    {
-                        $errors.Add("Manager not found in AD. Manager unchanged.")
-                    }
+                {                    
+                    Set-ADUser -Identity $adUser -Manager $newManager.objectGUID -ErrorAction "Stop"
+                    $logRecord.'Manager After' = $newManager.name
+                    $changeMade = $true
                 }
                 catch
                 {
@@ -307,7 +297,7 @@ function Update-OrgChart($userImport)
         # Update country
         if (-not [string]::IsNullOrWhiteSpace($newCountry))
         {
-            if ($adUser.co -ne $newCountry) # check if there are changes to make
+            if ($adUser.co -cne $newCountry) # check if there are changes to make
             {
                 try
                 {
@@ -330,7 +320,7 @@ function Update-OrgChart($userImport)
         # Update state
         if (-not [string]::IsNullOrWhiteSpace($newState))
         {
-            if ($adUser.st -ne $newState) # check if there are changes to make
+            if ($adUser.st -cne $newState) # check if there are changes to make
             {
                 try
                 {
@@ -353,7 +343,7 @@ function Update-OrgChart($userImport)
         # Update city
         if (-not [string]::IsNullOrWhiteSpace($newCity))
         {
-            if ($adUser.l -ne $newCity) # check if there are changes to make
+            if ($adUser.l -cne $newCity) # check if there are changes to make
             {
                 try
                 {
@@ -377,12 +367,12 @@ function Update-OrgChart($userImport)
         if ( -not([string]::IsNullOrWhiteSpace($newClinic)) -and -not([string]::IsNullOrWhiteSpace($newState)) )
         {
             $newOfficeLocation = "$newState - $newClinic"
-            if ($adUser.physicalDeliveryOfficeName -ne $newOfficeLocation) # check if there are changes to make
+            if ($adUser.physicalDeliveryOfficeName -cne $newOfficeLocation) # check if there are changes to make
             {
                 try
                 {
                     Set-ADUser -Identity $adUser -Office $newOfficeLocation -ErrorAction "Stop"
-                    $logRecord.'Clinic After' = $newOfficeLocation
+                    $logRecord.'Office Location After' = $newOfficeLocation
                     $changeMade = $true
                 }
                 catch
@@ -445,8 +435,8 @@ function New-LogRecord
     "State After"       = ""
     "City Before"       = ""
     "City After"        = ""
-    "Clinic Before"     = ""
-    "Clinic After"      = ""
+    "Office Location Before"     = ""
+    "Office Location After"      = ""
     }
 }
 
