@@ -1,8 +1,14 @@
 # Version 1.00
-# Created By: Zak Paine
-# Release Date: 10/15/2026
+# Created By: 
+# Release Date:
 # Revised By: 
 # Revised Date:
+
+#Requires -Modules @{ ModuleName="ActiveDirectory"; ModuleVersion="1.0.0.0"}
+#Requires -Modules @{ ModuleName="ADSync"; ModuleVersion="1.0.0.0"}
+#Requires -RunAsAdministrator
+
+# Script must run on Entra ID connect server
 
 # functions
 function Initialize-HeaderNames # remember to tweak this function if your spreadsheet uses different header names
@@ -19,57 +25,16 @@ function Initialize-HeaderNames # remember to tweak this function if your spread
 
 function Show-Introduction
 {
+    Write-Host ("This script takes an import from the HRIS and updates the following properties for the given users in active directory and then pushes it to Entra ID:`n" +
+                "- Job Title`n" +
+                "- Department`n" +
+                "- Manager`n" +
+                "- Country`n" +
+                "- State`n" +
+                "- City`n" +
+                "- Clinic`n`n" +
+                "Script must run on Entra ID Connect server.") -ForegroundColor "Cyan"
 
-}
-
-function Use-Module($moduleName)
-{    
-    $keepGoing = -not(Test-ModuleInstalled $moduleName)
-    while ($keepGoing)
-    {
-        Prompt-InstallModule $moduleName
-        Test-SessionPrivileges
-        Install-Module $moduleName
-
-        if ((Test-ModuleInstalled $moduleName) -eq $true)
-        {
-            Write-Host "Importing module..." -ForegroundColor "Cyan"
-            Import-Module $moduleName
-            $keepGoing = $false
-        }
-    }
-}
-
-function Test-ModuleInstalled($moduleName)
-{    
-    $module = Get-Module -Name $moduleName -ListAvailable
-    return ($null -ne $module)
-}
-
-function Prompt-InstallModule($moduleName)
-{
-    do 
-    {
-        Write-Host "$moduleName module is required." -ForegroundColor "Cyan"
-        $confirmInstall = Read-Host -Prompt "Would you like to install the module? (y/n)"
-    }
-    while ($confirmInstall -inotmatch "^\s*y\s*$") # regex matches a y but allows spaces
-}
-
-function Test-SessionPrivileges
-{
-    $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-    $currentSessionIsAdmin = $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-
-    if ($currentSessionIsAdmin -ne $true)
-    {
-        Write-Host ("Please run script with admin privileges.`n" +
-            "1. Open Powershell as admin.`n" +
-            "2. CD into script directory.`n" +
-            "3. Run .\scriptname`n") -ForegroundColor "Red"
-        Read-Host "Press Enter to exit"
-        exit
-    }
 }
 
 function TryGet-UserCSV
@@ -77,7 +42,7 @@ function TryGet-UserCSV
     do
     {
         $csvPath = Prompt-UserCSVPath
-        $userImport = Import-CSV -Path $csvPath
+        $userImport = Import-CSV -Path $csvPath -Encoding "UTF8"
     }
     while (-not(Test-CSVHasCorrectHeaders $userImport))
 
@@ -99,7 +64,7 @@ function Prompt-UserCSVPath
             continue
         }
 
-        $csvFile = Get-Item -Path $csvPath -ErrorAction SilentlyContinue
+        $csvFile = Get-Item -Path $csvPath -ErrorAction "SilentlyContinue"
         if ($null -eq $csvFile)
         {
             Write-Warning "File not found."
@@ -172,29 +137,44 @@ function Test-CSVHasCorrectHeaders($importedCSV)
 
 function Update-OrgChart($userImport)
 {
-    Write-Host "Updating org charts..." -ForegroundColor "DarkCyan"
-    $timeStamp = Get-Date -Format "yyyy-MM-dd-hh-mm"
+    Write-Host "Updating org charts..." -ForegroundColor "Cyan"
+    $timeStamp = Get-Date -Format "yyyy-MM-dd-hh-mmtt"
     $logFilePath = "$PSScriptRoot\OrgChartChanges $timeStamp.csv"
-    $totalRecordsProcessed = 0
+    $index = 0
+    $recordCount = $userImport.Count
 
-    foreach ($user in $userImport)
+    foreach ($userRecord in $userImport)
     {
-        $totalRecordsProcessed++
-        Write-Progress -Activity "Updating users with new info..." -Status "$totalRecordsProcessed records processed."
+        $index++
+        Write-Progress -Activity "Updating users..." -Status "$index/$recordCount - $($userRecord.$UPN)"
 
-        $userUpn = $user.$upn.Trim()
         $logRecord = New-LogRecord
 
+        if ([string]::IsNullOrWhiteSpace($($userRecord.$upn)))
+        {
+            $logRecord.Status = "Skipped: blank UPN"
+            continue
+        }
+
+        $userUpn = $userRecord.$upn.Trim()
         try
         {
-            $adUser = Get-ADUser -Filter "UserPrincipalName -eq '$upn'" -Properties @("title", "department", "manager", "co", "st", "l", "physicalDeliveryOfficeName")
+            $adUser = Get-ADUser -Filter {UserPrincipalName -eq $userUpn} -Properties @("title", "department", "manager", "co", "st", "l", "physicalDeliveryOfficeName") -ErrorAction "Stop"
         }
         catch
         {
             $errorRecord = $_
             $logRecord.Status = $errorRecord.ToString()
+            $logRecord | Export-CSV -Path $logFilePath -Append -NoTypeInformation
             continue
-        }        
+        }
+
+        if ($null -eq $adUser)
+        {
+            $logRecord.Status = "User not found"
+            $logRecord | Export-CSV -Path $logFilePath -Append -NoTypeInformation
+            continue
+        }
 
         # Fill in 'before' values on log record
         $logRecord.UPN = $userUpn
@@ -203,40 +183,175 @@ function Update-OrgChart($userImport)
         $managerName = ($adUser.manager -split ',')[0] -replace '^CN=', '' # get the canonical name from the distinguished name
         $logRecord.'Manager Before' = $managerName
         $logRecord.'Country Before' = $adUser.co
-        $logRecord.'State Before' = $adUser.start
+        $logRecord.'State Before' = $adUser.state
         $logRecord.'City Before' = $adUser.l
         $logRecord.'Clinic Before' = $adUser.physicalDeliveryOfficeName
 
         # Update user and fill in log record
-        try
+        $status = New-Object System.Collections.Generic.List[string]
+        
+        # Update job title
+        if ($null -ne $userRecord.$jobTitle)
         {
-            Set-ADUser -Identity $adUser -Title $user.$jobTitle
-            $logRecord.'Title After' = $user.$jobTitle
+            try
+            {
+                Set-ADUser -Identity $adUser -Title $userRecord.$jobTitle -ErrorAction "Stop"
+                $logRecord.'Title After' = $userRecord.$jobTitle
+            }
+            catch
+            {
+                $errorRecord = $_
+                $status.Add($errorRecord.ToString())
+                $logRecord.'Title After' = $adUser.title
+            }
         }
-        catch
+        else
         {
-            $errorRecord = $_
-            $logRecord.Status = $errorRecord.ToString()
+            $status.Add("Provided job title is blank.")
+            $logRecord.'Title After' = $adUser.title
         }
 
-        try
+        # Update department
+        if ($null -ne $userRecord.$department)
         {
-
+            try
+            {
+                Set-ADUser -Identity $adUser -Department $userRecord.$department -ErrorAction "Stop"
+                $logRecord.'Department After' = $userRecord.$department
+            }
+            catch
+            {
+                $errorRecord = $_
+                $status.Add($errorRecord.ToString())
+                $logRecord.'Department After' = $adUser.department
+            }
         }
-        catch
+        else
         {
-
+            $status.Add("Provided department is blank.")
+            $logRecord.'Department After' = $adUser.department
         }
 
-        try
+        # Update manager
+        if ($null -ne $userRecord.$managerEmail)
         {
-
+            try
+            {
+                $manager = Get-ADUser -Filter { UserPrincipalName -eq $($userRecord.$managerEmail)}
+                Set-ADUser -Identity $adUser -Manager $manager.objectGUID -ErrorAction "Stop"
+                $newManagerName = ($manager.DistinguishedName -split ',')[0] -replace '^CN=', '' # get the canonical name from the distinguished name
+                $logRecord.'Manager After' = $newManagerName
+            }
+            catch
+            {
+                $errorRecord = $_
+                $status.Add($errorRecord.ToString())
+                $logRecord.'Manager After' = $managerName
+            }
         }
-        catch
+        else
         {
-
+            $status.Add("Provided manager is blank.")
+            $logRecord.'Manager After' = $managerName
         }
+
+        # Update country
+        if ($null -ne $userRecord.$country)
+        {
+            try
+            {
+                Set-ADUser -Identity $adUser -Replace @{co="$($userRecord.$country)"} -ErrorAction "Stop"
+                $logRecord.'Country After' = $userRecord.$country
+            }
+            catch
+            {
+                $errorRecord = $_
+                $status.Add($errorRecord.ToString())
+                $logRecord.'Country After' = $adUser.co
+            }
+        }
+        else
+        {
+            $status.Add("Provided country is blank")
+            $logRecord.'Country After' = $adUser.co
+        }
+
+        # Update state
+        if ($null -ne $userRecord.$state)
+        {
+            try
+            {
+                Set-ADUser -Identity $adUser -State $userRecord.$state -ErrorAction "Stop"
+                $logRecord.'State After' = $userRecord.$state
+
+            }
+            catch
+            {
+                $errorRecord = $_
+                $status.Add($errorRecord.ToString())
+                $logRecord.'State After' = $adUser.state
+            }
+        }
+        else
+        {
+            $status.Add("Provided state is blank")
+            $logRecord.'State After' = $adUser.state
+        }
+
+        # Update city
+        if ($null -ne $userRecord.$city)
+        {
+            try
+            {
+                Set-ADUser -Identity $adUser -City $userRecord.$city -ErrorAction "Stop"
+                $logRecord.'City After' = $userRecord.$city
+            }
+            catch
+            {
+                $errorRecord = $_
+                $status.Add($errorRecord.ToString())
+                $logRecord.'City After' = $adUser.l
+            }
+        }
+        else
+        {
+            $status.Add("Provided city is blank")
+            $logRecord.'City After' = $adUser.l
+        }
+
+        # Update office location
+        if ($null -ne $userRecord.$clinic)
+        {
+            try
+            {
+                Set-ADUser -Identity $adUser -Office $userRecord.$clinic -ErrorAction "Stop"
+                $logRecord.'Clinic After' = $userRecord.$clinic
+            }
+            catch
+            {
+                $errorRecord = $_
+                $status.Add($errorRecord.ToString())
+                $logRecord.'Clinic After' = $adUser.physicalDeliveryOfficeName
+            }
+        }
+        else
+        {
+            $status.Add("Provided clinic is blank")
+            $logRecord.'Clinic After' = $adUser.physicalDeliveryOfficeName
+        }
+
+        if ($status.Count -eq 0)
+        {
+            $logRecord.Status = "Success"
+        }
+        else
+        {
+            $logRecord.Status = $status -Join ' -- '
+        }
+        
+        $logRecord | Export-CSV -Path $logFilePath -Append -NoTypeInformation
     }
+    Write-Progress -Completed
 }
 
 function New-LogRecord
@@ -261,11 +376,34 @@ function New-LogRecord
     }
 }
 
+function Sync-ToEntraID
+{
+    try 
+    {
+        $result = Start-ADSyncSyncCycle -PolicyType "Delta" -ErrorAction "Stop" # Syncs on-prem changes to Entra ID
+    }
+    catch 
+    {
+        $errorRecord = $_
+        Write-Warning "Error starting sync to Entra ID: `n$errorRecord"
+        return
+    }
+
+    if ($result.Result -ieq "Success")
+    {
+        Write-Host "Sync to Entra ID was started successfully." -ForegroundColor "Green"
+    }
+    else
+    {
+        Write-Host "Issue starting sync to Entra ID. Result was $($result.Result)."
+    }
+}
+
 # main
 Initialize-HeaderNames
 Show-Introduction
-Use-Module "ActiveDirectory"
 $userImport = TryGet-UserCSV
 Read-Host "Press Enter to make the changes"
 Update-OrgChart $userImport
+Sync-ToEntraID
 Read-Host "Press Enter to exit"
